@@ -1,6 +1,8 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.IO;
 using System.IO.Compression;
+using System.Threading.Tasks;
 
 namespace BandcampExpand
 {
@@ -262,15 +264,30 @@ namespace BandcampExpand
             // Bandcamp downloads are zipped, so lets see if we can find any
             DirectoryInfo d = new DirectoryInfo(sourceFolder);
             FileInfo[] Files = d.GetFiles("*.zip");
-            foreach (FileInfo file in Files)
-            {
-                Console.WriteLine("Processing file: " + file.Name);
-                if (ProcessCompressedFile(file, musicFolder))
-                {
-                    file.Delete();
-                }
-            }
+            BlockingCollection<string> processedFiles = new BlockingCollection<string>();
 
+            Parallel.ForEach<FileInfo, string> (Files, // source collection
+                () => null, // Method to initialize the local variables (noop)
+                (file, loop, name) =>
+                { 
+                    Console.WriteLine("Processing file: " + file.Name);
+                    if (ProcessCompressedFile(file, musicFolder))
+                    {
+                        file.Delete();
+                        return file.Name;
+                    }
+                    return null;
+                },
+                (name) =>
+                {
+                    if (!string.IsNullOrEmpty(name)) { processedFiles.Add(name); }
+                }
+            );
+            Console.WriteLine("");
+            foreach(string name in processedFiles)
+            {
+                Console.WriteLine("Successfully processed: " + name);
+            }
             Console.WriteLine("Press any key to end");
             Console.ReadKey();
         }
