@@ -266,10 +266,10 @@ namespace BandcampExpand
             FileInfo[] Files = d.GetFiles("*.zip");
             BlockingCollection<string> processedFiles = new BlockingCollection<string>();
 
-            Parallel.ForEach<FileInfo, string> (Files, // source collection
+            Parallel.ForEach<FileInfo, string>(Files, // source collection
                 () => null, // Method to initialize the local variables (noop)
                 (file, loop, name) =>
-                { 
+                {
                     Console.WriteLine("Processing file: " + file.Name);
                     if (ProcessCompressedFile(file, musicFolder))
                     {
@@ -284,7 +284,7 @@ namespace BandcampExpand
                 }
             );
             Console.WriteLine("");
-            foreach(string name in processedFiles)
+            foreach (string name in processedFiles)
             {
                 Console.WriteLine("Successfully processed: " + name);
             }
