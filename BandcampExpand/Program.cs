@@ -2,7 +2,23 @@
 using System.Collections.Concurrent;
 using System.IO;
 using System.IO.Compression;
+using System.Runtime.CompilerServices;
+using System.Threading;
 using System.Threading.Tasks;
+
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
+/*
+using var loggerFactory = LoggerFactory.Create(static builder =>
+{
+    builder
+        .AddDebug()
+        .AddConsole();
+});
+
+ILogger log = loggerFactory.CreateLogger<Program>();
+*/
 
 namespace BandcampExpand
 {
@@ -15,6 +31,20 @@ namespace BandcampExpand
 
     public static class Program
     {
+
+        public static ILogger log = LoggerFactory.Create(static builder => {
+            builder
+                .AddFilter("BandcampExpand", LogLevel.Debug)
+                .AddDebug()
+                .AddSimpleConsole(options =>
+                {
+                    options.IncludeScopes = true;
+                    options.SingleLine = true;
+                    options.TimestampFormat = "HH:mm:ss ";
+                })
+                .AddConsole();
+        }).CreateLogger("BandcampExpand");
+
         // Peek inside the archive to see if we can recognise any of the file types.
         // NOTE that this method assumes there is not a mix of FLAC and AAC inside a single
         // archive.
@@ -58,7 +88,7 @@ namespace BandcampExpand
 
         static void ExpandCompressedFileToPath(FileInfo file, string destPath, string bandName, string albumName)
         {
-            Console.WriteLine("Expanding " + file.Name + " to " + destPath);
+            log.LogInformation("Expanding " + file.Name + " to " + destPath);
             string zipPath = file.FullName;
 
             // Normalizes the path.
@@ -87,11 +117,11 @@ namespace BandcampExpand
                     {
                         if (File.Exists(destinationPath))
                         {
-                            Console.WriteLine("Skipping (already exists) " + fullname);
+                            log.LogWarning("Skipping (already exists) " + fullname);
                         }
                         else
                         {
-                            Console.WriteLine("Writing " + fullname);
+                            log.LogDebug("Writing " + destinationPath);
                             entry.ExtractToFile(destinationPath);
                         }
                     }
@@ -99,16 +129,16 @@ namespace BandcampExpand
             }
         }
 
-        static public string GetPathForFileType(FileInfo file, string musicFolder)
+        static public string GetPathForFileType(FileInfo file)
         {
             switch (GetCompressedFileType(file))
             {
                 case CompressedFileType.FLAC:
-                    Console.WriteLine("Found FLAC files in " + file.Name);
-                    return musicFolder + "/FLAC";
+                    log.LogInformation("Found FLAC files in " + file.Name);
+                    return "FLAC";
                 case CompressedFileType.AAC:
-                    Console.WriteLine("Found AAC files in " + file.Name);
-                    return musicFolder + "/AAC";
+                    log.LogInformation("Found AAC files in " + file.Name);
+                    return "AAC";
                 default:
                     throw new FileNotFoundException("Cannot find known file type inside compressed folder");
             }
@@ -145,15 +175,16 @@ namespace BandcampExpand
                     long sLen = file.Length;
                     if (dLen == sLen)
                     {
-                        Console.WriteLine("File: " + temppath + " already exists, skipping...");
+                        log.LogWarning("File: " + temppath + " already exists, skipping...");
                         continue;
                     }
                     else
                     {
-                        Console.WriteLine("File: " + temppath + " already exists, but has a filesize mismatch, copying again (" + sLen + " != " + dLen + ")");
+                        log.LogError("File: " + temppath + " already exists, but has a filesize mismatch, copying again (" + sLen + " != " + dLen + ")");
                         File.Delete(temppath);
                     }
                 }
+                log.LogDebug("Copying from " + file.FullName + " to " + temppath);
                 file.CopyTo(temppath, false);
             }
 
@@ -217,11 +248,11 @@ namespace BandcampExpand
             }
             catch (System.ArgumentOutOfRangeException e)
             {
-                Console.WriteLine("Failed to parse band from filename: " + file.Name + ". Is this a bandcamp download?");
-                Console.WriteLine(e.Message);
+                log.LogError("Failed to parse band from filename: " + file.Name + ". Is this a bandcamp download?");
+                log.LogError(e.Message);
                 return false;
             }
-            string bandTempPath = tempPath + "/" + bandName;
+            
             string albumName;
             try
             {
@@ -229,27 +260,31 @@ namespace BandcampExpand
             }
             catch (System.ArgumentOutOfRangeException e)
             {
-                Console.WriteLine("Failed to parse album from filename: " + file.Name + ". Is this a bandcamp download?");
-                Console.WriteLine(e.Message);
+                log.LogError("Failed to parse album from filename: " + file.Name + ". Is this a bandcamp download?");
+                log.LogError(e.Message);
                 return false;
             }
-            string bandDestPath;
+            string albumType;
             try
             {
-                bandDestPath = GetPathForFileType(file, musicFolder) + "/" + bandName;
+                albumType = GetPathForFileType(file);
             }
             catch (System.ArgumentOutOfRangeException e)
             {
-                Console.WriteLine("Failed to parse path from filename: " + file.Name + ". Is this a bandcamp download?");
-                Console.WriteLine(e.Message);
+                log.LogError("Failed to parse path from filename: " + file.Name + ". Is this a bandcamp download?");
+                log.LogError(e.Message);
                 return false;
             }
-            string tempExtractionPath = tempPath + "/" + bandName + "/" + albumName;
-            Console.WriteLine("Creating temp directory: " + tempExtractionPath);
+            string bandTempPath = tempPath + "/" + albumType + "/" + bandName;
+            string tempExtractionPath = bandTempPath + "/" + albumName;
+
+            string bandDestPath = musicFolder + "/" + albumType + "/" + bandName;
+
+            log.LogInformation("Creating temp directory: " + tempExtractionPath);
             Directory.CreateDirectory(tempExtractionPath);
             ExpandCompressedFileToPath(file, tempExtractionPath, bandName, albumName);
 
-            Console.WriteLine("Moving temp directory to final location");
+            log.LogInformation("Moving " + bandTempPath + " to final location: " + bandDestPath);
             DirectoryCopy(bandTempPath, bandDestPath, true);
             Directory.Delete(bandTempPath, true);
 
@@ -270,25 +305,29 @@ namespace BandcampExpand
                 () => null, // Method to initialize the local variables (noop)
                 (file, loop, name) =>
                 {
-                    Console.WriteLine("Processing file: " + file.Name);
-                    if (ProcessCompressedFile(file, musicFolder))
+                    using (log.BeginScope(Thread.CurrentThread.ManagedThreadId.ToString()))
                     {
-                        file.Delete();
-                        return file.Name;
+                        log.LogInformation("Processing file: " + file.Name);
+                        if (ProcessCompressedFile(file, musicFolder))
+                        {
+                            file.Delete();
+                            return file.Name;
+                        }
+                        return null;
                     }
-                    return null;
+                    ;
                 },
                 (name) =>
                 {
                     if (!string.IsNullOrEmpty(name)) { processedFiles.Add(name); }
                 }
             );
-            Console.WriteLine("");
+            log.LogInformation("");
             foreach (string name in processedFiles)
             {
-                Console.WriteLine("Successfully processed: " + name);
+                log.LogInformation("Successfully processed: " + name);
             }
-            Console.WriteLine("Press any key to end");
+            log.LogInformation("Press any key to end");
             Console.ReadKey();
         }
     }
